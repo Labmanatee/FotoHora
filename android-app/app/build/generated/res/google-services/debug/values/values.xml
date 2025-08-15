@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="firebase_database_url" translatable="false">https://fotohora-369-default-rtdb.firebaseio.com</string>
+    <string name="gcm_defaultSenderId" translatable="false">771805351120</string>
+    <string name="google_api_key" translatable="false">AIzaSyA36lkZXwENIMlw_irQLA0CjcVuVfZRTH8</string>
+    <string name="google_app_id" translatable="false">1:771805351120:android:97de10827ae29ee5b562d5</string>
+    <string name="google_crash_reporting_api_key" translatable="false">AIzaSyA36lkZXwENIMlw_irQLA0CjcVuVfZRTH8</string>
+    <string name="google_storage_bucket" translatable="false">fotohora-369.firebasestorage.app</string>
+    <string name="project_id" translatable="false">fotohora-369</string>
+</resources>

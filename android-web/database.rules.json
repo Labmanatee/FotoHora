@@ -1,0 +1,20 @@
+{
+  "rules": {
+    "config": {
+      ".read": true,
+      ".write": true
+    },
+    "dispositivos": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "ubicaciones": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "usuarios": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}

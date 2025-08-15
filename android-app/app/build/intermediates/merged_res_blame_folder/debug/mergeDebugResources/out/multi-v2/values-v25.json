@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.example.fotohora.app-mergeDebugResources-30:/values-v25/values-v25.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\Mauricio\\.gradle\\caches\\8.13\\transforms\\5f54430d31ee44e4a6b02cb196264d63\\transformed\\appcompat-1.6.1\\res\\values-v25\\values-v25.xml",
+                    "from": {
+                        "startLines": "2,3,4,6",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,126,209,308",
+                        "endLines": "2,3,5,7",
+                        "endColumns": "70,82,12,12",
+                        "endOffsets": "121,204,303,414"
+                    }
+                }
+            ]
+        }
+    ]
+}
