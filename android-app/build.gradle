@@ -17,6 +17,10 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        maven {
+            // [required] background_geolocation
+            url "https://www.transistorsoft.com/maven"
+        }
     }
 }
 

@@ -1,179 +1,125 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter_background_geolocation/flutter_background_geolocation.dart' as bg;
 
 class LocationService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseDatabase _db = FirebaseDatabase.instance;
+  final FirebaseDatabase _database = FirebaseDatabase.instance;
+
   User? _user;
+  DatabaseReference? _userRef;
+  bool _isInitialized = false;
 
-  StreamSubscription<Position>? _positionStream;
-  StreamSubscription? _configSubscription;
-  StreamSubscription? _connectivitySubscription;
+  Future<void> init() async {
+    if (_isInitialized) return;
+    debugPrint("INFO: Iniciando LocationService con BackgroundGeolocation...");
 
-  bool _isOnline = true;
-  bool _isProcessingQueue = false;
-
-  // Default config values
-  int _walkingInterval = 10;
-  int _vehicleInterval = 3;
-  final double _vehicleSpeedThreshold = 5.5;
-  final double _stationarySpeedThreshold = 0.5;
-  final int _distanceFilter = 3;
-
-  LocationSettings? _currentLocationSettings;
-
-  Future<void> start() {
-    if (kIsWeb) return Future.value();
-    print("Iniciando servicio de ubicación...");
-    return _initialize();
-  }
-
-  Future<void> _initialize() async {
-    await _signIn();
-    if (_user != null) {
-      await _requestPermissions();
-      _listenToConnectivity();
-      _listenToConfig(); // This will trigger the first location update
-    } else {
-      print("Fallo el inicio de sesión.");
+    bool signedIn = await _signInAnonymously();
+    if (!signedIn) {
+      debugPrint("ERROR CRÍTICO: La autenticación falló. El servicio no puede continuar.");
+      return;
     }
+    _userRef = _database.ref('devices/${_user!.uid}');
+
+    _initBackgroundGeolocation();
+    _isInitialized = true;
   }
 
-  void _listenToConnectivity() {
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
-      final isOnlineNow = results.contains(ConnectivityResult.mobile) || results.contains(ConnectivityResult.wifi);
-      if (_isOnline != isOnlineNow) {
-        _isOnline = isOnlineNow;
-        print("Estado de la conexión: ${_isOnline ? 'Online' : 'Offline'}");
-        if (_isOnline) {
-          _processQueue();
-        }
+  void _initBackgroundGeolocation() {
+    bg.BackgroundGeolocation.onLocation(_onLocation, _onLocationError);
+    bg.BackgroundGeolocation.onConnectivityChange(_onConnectivityChange);
+
+    bg.BackgroundGeolocation.ready(bg.Config(
+      desiredAccuracy: bg.Config.DESIRED_ACCURACY_HIGH,
+      distanceFilter: 10,
+      stopOnTerminate: false,
+      startOnBoot: true,
+      foregroundService: true,
+      notification: bg.Notification(
+        title: "Fotohora Tracker",
+        text: "Servicio de ubicación en funcionamiento",
+      ),
+      logLevel: bg.Config.LOG_LEVEL_VERBOSE,
+      stopTimeout: 5,
+      stationaryRadius: 25,
+    )).then((bg.State state) {
+      if (!state.enabled) {
+        bg.BackgroundGeolocation.start();
+        debugPrint("INFO: Servicio BackgroundGeolocation iniciado.");
       }
     });
   }
 
-  // ... (signIn and requestPermissions methods remain the same) ...
-
-  void _listenToConfig() {
-    // ... (logic is the same, but now it calls _restartLocationUpdates) ...
+  void _onLocation(bg.Location location) {
+    debugPrint('[onLocation] - ${location.coords.latitude}, ${location.coords.longitude}');
+    _processLocation(location);
   }
 
-  void _restartLocationUpdates(Position? lastPosition) {
-    // ... (logic is the same) ...
+  void _onLocationError(bg.LocationError error) {
+    debugPrint('[onLocation] ERROR - $error');
   }
 
-  void _handlePositionUpdate(Position position) {
-    if (position.speed < _stationarySpeedThreshold) {
-      return;
-    }
-    _queueOrSendLocation(position);
-    _restartLocationUpdates(position);
+  void _onConnectivityChange(bg.ConnectivityChangeEvent event) {
+    debugPrint('[onConnectivityChange] - connected: ${event.connected}');
+    _updateConnectionStatus(event.connected);
   }
 
-  Future<void> _queueOrSendLocation(Position location) async {
+  Future<void> _processLocation(bg.Location location) async {
     final locationData = {
-      'lat': location.latitude,
-      'lng': location.longitude,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'speed_mps': location.speed,
+      'lat': location.coords.latitude,
+      'lng': location.coords.longitude,
+      'speed': location.coords.speed,
+      'accuracy': location.coords.accuracy,
+      'timestamp': location.timestamp,
     };
+    await _sendToFirebase(locationData);
+  }
 
-    if (_isOnline) {
-      print("Enviando ubicación a Firebase...");
-      await _sendToFirebase(locationData);
-      await _processQueue(); // Try to send any stored locations
-    } else {
-      print("Guardando ubicación en la cola offline...");
-      await _writeToQueue(locationData);
+  Future<void> _sendToFirebase(Map<String, dynamic> data) async {
+    if (_userRef == null) return;
+    try {
+      await _userRef!.child('locations').push().set(data);
+      await _userRef!.child('last_location').set(data);
+      debugPrint("INFO: Datos de ubicación enviados a Firebase.");
+    } catch (e) {
+      debugPrint("ERROR: Error al enviar datos a Firebase: $e");
     }
   }
 
-  Future<File> _getQueueFile() async {
-    final directory = await getApplicationDocumentsDirectory();
-    return File('${directory.path}/offline_queue.json');
-  }
-
-  Future<void> _writeToQueue(Map<String, dynamic> locationData) async {
+  Future<void> _updateConnectionStatus(bool isOnline) async {
+    if (_userRef == null) return;
     try {
-      final file = await _getQueueFile();
-      String content = await file.exists() ? await file.readAsString() : '[]';
-      List<dynamic> queue = jsonDecode(content);
-      queue.add(locationData);
-      await file.writeAsString(jsonEncode(queue));
+      await _userRef!.child('status').set({
+        'online': isOnline,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      debugPrint("INFO: Estado de conexión en Firebase actualizado a: ${isOnline ? 'Online' : 'Offline'}");
     } catch (e) {
-      print("Error escribiendo en la cola: $e");
+      debugPrint("ERROR: No se pudo actualizar el estado de conexión: $e");
     }
   }
 
-  Future<void> _processQueue() async {
-    if (_isProcessingQueue || !_isOnline) return;
-    _isProcessingQueue = true;
-    print("Procesando cola de ubicaciones offline...");
-
-    try {
-      final file = await _getQueueFile();
-      if (!await file.exists()) {
-        _isProcessingQueue = false;
-        return;
-      }
-
-      String content = await file.readAsString();
-      if (content.isEmpty || content == '[]') {
-        _isProcessingQueue = false;
-        return;
-      }
-
-      List<dynamic> queue = jsonDecode(content);
-      List<dynamic> remainingQueue = List.from(queue);
-
-      for (var item in queue) {
-        final success = await _sendToFirebase(item as Map<String, dynamic>);
-        if (success) {
-          remainingQueue.remove(item);
-        } else {
-          // Stop processing if one fails, to maintain order
-          break;
-        }
-      }
-
-      await file.writeAsString(jsonEncode(remainingQueue));
-      print("Procesamiento de cola finalizado. Quedan ${remainingQueue.length} elementos.");
-
-    } catch (e) {
-      print("Error procesando la cola: $e");
-    } finally {
-      _isProcessingQueue = false;
-    }
+  void dispose() {
+    bg.BackgroundGeolocation.stop();
+    _updateConnectionStatus(false);
+    _isInitialized = false;
+    debugPrint("INFO: Servicio de ubicación detenido y limpiado.");
   }
 
-  Future<bool> _sendToFirebase(Map<String, dynamic> locationData) async {
-    if (_user == null) return false;
-    final deviceId = _user!.uid;
-    final timestamp = locationData['timestamp'];
-
+  Future<bool> _signInAnonymously() async {
     try {
-      await _db.ref('ubicaciones/$deviceId/$timestamp').set(locationData);
-      await _db.ref('dispositivos/$deviceId/ultima_ubicacion').set(locationData);
-      return true;
+      if (_auth.currentUser != null) {
+        _user = _auth.currentUser;
+        return true;
+      }
+      final userCredential = await _auth.signInAnonymously();
+      _user = userCredential.user;
+      return _user != null;
     } catch (e) {
-      print("Error enviando a Firebase: $e");
+      debugPrint("ERROR: Error al intentar autenticar anónimamente: $e");
       return false;
     }
-  }
-
-  // ... (stop method needs to cancel the new subscription) ...
-  @override
-  void stop() {
-    _positionStream?.cancel();
-    _configSubscription?.cancel();
-    _connectivitySubscription?.cancel();
-    print("Servicio de ubicación detenido.");
   }
 }
